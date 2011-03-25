@@ -96,7 +96,7 @@ void seh_leave_guard()
 #endif
 }
 
-static void handler(int c);
+void handler(int c);
 
 //POSIX signal handler registration
 void install_signal_traps()
@@ -200,7 +200,7 @@ long __stdcall win32_handler(PEXCEPTION_POINTERS excp)
 #endif
 
 //POSIX signal handler.
-static void handler(int c)
+void handler(int c)
 {
     seh_info *act_seh_object=NULL;
 	int curr_seh_index = 0;
