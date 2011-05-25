@@ -202,11 +202,11 @@ long __stdcall win32_handler(PEXCEPTION_POINTERS excp)
 //POSIX signal handler.
 void handler(int c)
 {
-    seh_info *act_seh_object=NULL;
+	seh_info *act_seh_object=NULL;
 	int curr_seh_index = 0;
-
+	
 	//get lastest seh. its active.
-    curr_seh_index = g_seh_index - 1;
+	curr_seh_index = g_seh_index - 1;
 
 	//check for valid seh.
 	if (curr_seh_index < 0)
@@ -231,7 +231,7 @@ void handler(int c)
 	//we are in the guarded area.
 	g_sync.guarded_in_handler = 1;
 
-    act_seh_object = &g_sehs[curr_seh_index];
+	act_seh_object = &g_sehs[curr_seh_index];
 
 	//if used SEH_CATCH_EX, we must detect to exception type.
 	if (act_seh_object->_exception_type_ptr)
@@ -319,16 +319,16 @@ int delete_seh(int index)
 		seh_guard(); //no, guard it. else, already guarded in by handler.
 
 	//erase
-    memset(&g_sehs[index], 0, sizeof(seh_info));
+	memset(&g_sehs[index], 0, sizeof(seh_info));
 	
 	//reorder
-    if (index != g_seh_index-1)
-    {
-        memmove(&g_sehs[index],&g_sehs[index+1],sizeof(seh_info) * (g_seh_index-(index+1)));
-        memset(&g_sehs[g_seh_index-1],0,sizeof(seh_info));
-    }
-
-    g_seh_index--;
+	if (index != g_seh_index-1)
+	{
+		memmove(&g_sehs[index],&g_sehs[index+1],sizeof(seh_info) * (g_seh_index-(index+1)));
+		memset(&g_sehs[g_seh_index-1],0,sizeof(seh_info));
+	}
+	
+	g_seh_index--;
 
 	//clean guarded mark if necessary.
 	if (g_sync.guarded_in_handler)
@@ -341,7 +341,6 @@ int delete_seh(int index)
 
 	//leave guard.
 	seh_leave_guard();
-
 	return 1;
 }
 
@@ -350,13 +349,14 @@ int create_seh(unsigned char* context,int id, unsigned long *extype)
 	if (g_seh_index == MAX_SEH-1)
 		return 0;
 
-    if (id <= 0)
-        return 0;
-
+	if (id <= 0)
+		return 0;
+	
 	//guard area
 	seh_guard();
 
 	//set context and other stuff to current seh slot
+
 	memcpy(g_sehs[g_seh_index]._context,context,SIZEOFJMPBUF);
 	g_sehs[g_seh_index]._seh_id = id;
 	g_sehs[g_seh_index]._exception_raised = 0;
