@@ -1,118 +1,144 @@
-/*
-Copyright (C) 2010  Oguz Kartal
+#ifndef __CSEH_H_
+#define __CSEH_H_
 
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*/
-
-#ifndef __SEH__
-#define __SEH__
-
-#include <signal.h>
 #include <setjmp.h>
+#include <signal.h>
+#include <stdio.h>
 
-#define CSEH_SEGMENTATION_FAULT 1
-#define CSEH_FPE_FAULT 2
-#define CSEH_ILLEGAL_INSTRUCTION 3
-#define CSEH_DIVIDE_BY_ZERO 4
-#define CSEH_NONCOUNTABLE_FAULT 5
+#define SEH_ERROR_ACCESS_VIOLATION			1
+#define SEH_ERROR_ARITHMETIC_OPERATION		2
+#define SEH_ERROR_DIVIDE_BY_ZERO			3
+#define SEH_ERROR_ILLEGAL_INSTRUCTION		4
+#define SEH_ERROR_NON_CONTINUABLE			5
+#define SEH_ERROR_UNKNOWN					6
+
+#define SEH_MAX_ERROR						SEH_ERROR_UNKNOWN
 
 
-#if defined(_WIN32) || defined(WIN32)
-#define PLATFORM_WINDOWS
-#elif defined(unix) || defined(_unix) || defined(__unix) || defined(__unix__)
-#define PLATFORM_UNIX
+
+#if _WIN32
+#include <Windows.h>
+typedef DWORD		threadid_t;
+#define NTOS		1
 #else
-#error "Not supported OS type"
+#include <pthread.h>
+typedef pthread_t	threadid_t;
+#define UNIX		1
 #endif
 
-#if defined (__x86_64__) || defined (__x86_64) || defined (__amd64) || defined (__amd64__) || defined (_AMD64_) || defined (_M_X64)
-#define ARCH_X64
-#elif defined(__i386__) || defined (i386) || defined(_M_IX86) || defined(_X86_) || defined(__THW_INTEL)
-#define ARCH_X86
+
+#if _USE_MSVC_SEH + _USE_GCC_LABEL_SUPPORTED_SEH + _USE_GENERIC_SEH > 1
+#error "You can only choose single seh type at the time"
+#endif
+
+#ifdef _SEH_AUTOSELECT
+
+#if _MSC_VER
+
+#define _USE_MSVC_SEH 1
+
+#elif __GNUC__
+
+#if NTOS
+#define _USE_GENERIC_SEH 1
 #else
-#error "Not supported CPU Arch."
+#define _USE_GCC_LABEL_SUPPORTED_SEH 1
 #endif
 
-#if defined(PLATFORM_WINDOWS)
-#define USE_VEH
+#endif
+
+#else
+
+#define _USE_GENERIC_SEH
+
 #endif
 
 
-typedef struct _seh_info
+typedef struct _seh_context_t
 {
-	unsigned char _exception_raised;
-	unsigned char _is_in_seh_area;
-	unsigned long *_exception_type_ptr;
-#if defined (PLATFORM_UNIX)
-	sigjmp_buf _context;
-#elif defined (PLATFORM_WINDOWS)
-	jmp_buf _context;
-#endif
-	int _seh_id;
-}seh_info;
+	threadid_t		threadId;
+	int				id;
+	int				faultCode;
+	jmp_buf			buf;
+}seh_context_t;
 
-#if defined(PLATFORM_UNIX)
+typedef struct _excpinfo_t
+{
+	int				sehId;
+	int				faultCode;
+}excpinfo_t;
 
-#define SETJMP(buf) sigsetjmp(buf,1)
-static sigjmp_buf _buf_context;
-#define SIZEOFJMPBUF sizeof(sigjmp_buf)
-
-#elif defined(PLATFORM_WINDOWS)
-
-#define SETJMP(buf) setjmp(buf)
-static jmp_buf _buf_context;
-#define SIZEOFJMPBUF sizeof(jmp_buf)
-
+#ifdef __cplusplus
+extern "C" {
 #endif
 
+#if NTOS
+	int seh_msvc_filter(excpinfo_t *ex, int code);
+#endif
 
-int process_seh(unsigned char *context,int id, unsigned long *exception_type);
-int finalize_seh(int id);
-void register_onfail_handler(void (*failhandler)());
+	int seh_getfaultcode(int sehid);
 
-void shutdown_seh_mgr();
+	void seh_destroy(int sehId);
 
-#define SEH_TRY(id) goto catch_init_##id; \
-					try_begin_##id: \
+	int seh_create(jmp_buf *buf, excpinfo_t *exp);
 
-#define SEH_CATCH(id) catch_init_##id: \
-									SETJMP(_buf_context); \
-									switch (process_seh((unsigned char *)_buf_context,id,0)) \
-									{ \
-										case -1: \
-											goto try_begin_##id; \
-										case 0: \
-											goto seh_final_##id; \
-										case 1: \
-											finalize_seh(id); \
-									} \
+	const char *seh_get_exception_string(excpinfo_t *ex);
+
+#ifdef _USE_GENERIC_SEH
+#define SEH_TRY  { int __seh0_init = 0; \
+			do { \
+				jmp_buf __seh0_jbuf; \
+				if (__seh0_init) \
+
+#define SEH_CATCH(x) if (!__seh0_init) { \
+						if (!setjmp(__seh0_jbuf)) \
+							(x)->sehId = seh_create(&__seh0_jbuf,(x)); \
+						else { \
+							__seh0_init = 0; \
+							(x)->faultCode = seh_getfaultcode((x)->sehId); \
+							break; \
+						} \
+						 __seh0_init = 1; \
+					} \
+					else \
+						__seh0_init = 0; \
+				} while (__seh0_init); \
+			} \
+			seh_destroy((x)->sehId); \
+			if ((x)->faultCode != 0) 
+
+#elif _USE_MSVC_SEH
+
+#define SEH_TRY __try
+#define SEH_CATCH(x) __except(seh_msvc_filter(x,GetExceptionCode()))
+
+#elif _USE_GCC_LABEL_SUPPORTED_SEH
+#define SEH_TRY { __label__ seh_catch_block, seh_ok; \
+					jmp_buf __seh0_jbuf; \
+					int __seh0_id; \
+                    if (!setjmp(__seh0_jbuf)) { \
+                        __seh0_id = seh_create(&__seh0_jbuf,NULL); \
+                    } \
+                    else { \
+                        goto seh_catch_block; \
+                    } \
 
 
-#define SEH_CATCH_EX(id, exceptiontype) catch_init_##id: \
-									SETJMP(_buf_context); \
-									switch (process_seh((unsigned char *)_buf_context,id,exceptiontype)) \
-									{ \
-										case -1: \
-											goto try_begin_##id; \
-										case 0: \
-											goto seh_final_##id; \
-										case 1: \
-											finalize_seh(id); \
-									} \
+#define SEH_CATCH(x) (x)->faultCode = 0; \
+					 (x)->sehId = __seh0_id; \
+                            goto seh_ok; \
+                            seh_catch_block:; \
+							(x)->sehId = __seh0_id; \
+                            (x)->faultCode = seh_getfaultcode((x)->sehId); \
+                            seh_ok:; \
+                    } \
+					seh_destroy((x)->sehId); \
+                    if ((x)->faultCode != 0)
+#else
 
+#endif
+#ifdef __cplusplus
+}
+#endif
 
-#define SEH_END(id)  seh_final_##id: finalize_seh(id) ;
-
-
-#endif //__SEH__
+#endif //__CSEH_H_
