@@ -1,21 +1,3 @@
-/*
-Copyright (C) 2010  Oguz Kartal
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*/
-
-
 #include "seh.h"
 
 typedef volatile unsigned int		spinlock_t;
@@ -24,14 +6,14 @@ typedef struct _context_listnode_t
 {
 	struct context_listnode_t *		next;
 	seh_context_t *					context;
-}context_listnode_t;
+} context_listnode_t;
 
 typedef struct _context_list
 {
 	context_listnode_t *			head;
 	context_listnode_t *			tail;
 	spinlock_t						synchLock;
-}context_list_t;
+} context_list_t;
 
 /*
 #define SEH_ERROR_ACCESS_VIOLATION			1
@@ -58,6 +40,12 @@ context_list_t listx = { 0,0 };
 seh_context_t *sehp_get_context(unsigned long id, int useSehId);
 
 
+#ifdef _SEH_DPRINT_ENABLE
+#define dprint printf
+#else
+#define dprint
+#endif
+
 void *sehp_alloc(int size)
 {
 	void *p = malloc(size);
@@ -67,8 +55,6 @@ void *sehp_alloc(int size)
 
 	return p;
 }
-
-
 
 #define getmem(type) (type*)sehp_alloc(sizeof(type))
 
@@ -117,14 +103,24 @@ void sehp_spinunlock(spinlock_t *spin)
 }
 
 
+int sehp_has_seh_chain(seh_context_t *seh);
+
 void sehp_signal_handler(int sigNum)
 {
 	seh_context_t *pctx = sehp_get_context(sehp_gettid(), 0);
+
+	dprint("seh trap! pctx = %p, tid: %lu", pctx, sehp_gettid());
 
 	if (!pctx)
 	{
 		//UNEXPECTED FAULT SIGNAL
 		return;
+	}
+
+	if (sehp_has_seh_chain(pctx))
+	{
+		pctx = pctx->seh_chain.blink;
+		dprint("chained seh trap. new seh %p (%lu)", pctx, pctx->id);
 	}
 
 	switch (sigNum)
@@ -183,18 +179,74 @@ void sehp_remove_signal_traps()
 	signal(SIGILL, SIG_DFL);
 }
 
+int sehp_has_seh_chain(seh_context_t *seh)
+{
+	return seh->seh_chain.blink != seh->seh_chain.flink;
+}
+
+void sehp_link_to_chain(seh_context_t *main, seh_context_t *link)
+{
+	seh_context_t *oldTail;
+
+	dprint("%p (%lu) is linking to %p (%lu)", link, link->id, main, main->id);
+
+	oldTail = main->seh_chain.blink;
+
+	link->seh_chain.blink = oldTail;
+	link->seh_chain.flink = NULL;
+
+	if (oldTail != main)
+		oldTail->seh_chain.flink = link;
+
+	main->seh_chain.blink = link;
+}
+
+seh_context_t *sehp_pop_seh(seh_context_t *main)
+{
+	seh_context_t *pseh, *newLast;
+
+	if (!sehp_has_seh_chain(main))
+	{
+		dprint("seh_pop | %p (%lu) is not chained", main, main->id);
+		return NULL;
+	}
+
+	pseh = main->seh_chain.blink;
+	newLast = pseh->seh_chain.blink;
+	pseh->seh_chain.blink = NULL;
+
+	if (newLast == main)
+		newLast->seh_chain.flink = main;
+	else
+		newLast->seh_chain.flink = NULL;
+
+	dprint("seh_pop | %p (%lu) popped", pseh, pseh->id);
+
+	return pseh;
+}
+
 void sehp_register(seh_context_t *ctx)
 {
 	context_listnode_t *node = getmem(context_listnode_t);
 	context_listnode_t *p;
+
+
+	if (!node)
+		return;
+
 	node->context = ctx;
 
+	ctx->seh_chain.flink = ctx;
+	ctx->seh_chain.blink = ctx;
+
 	sehp_spinlock(&listx.synchLock);
+
+	dprint("sehp_register | ctx: %p (%lu)", ctx, ctx->id);
 
 	if (!listx.head)
 	{
 		listx.head = listx.tail = node;
-#ifdef _USE_GENERIC_SEH || _USE_GCC_LABEL_SUPPORTED_SEH
+#if defined(_USE_GENERIC_SEH) || defined(_USE_GCC_LABEL_SUPPORTED_SEH)
 		sehp_install_signal_traps();
 #endif
 	}
@@ -212,6 +264,8 @@ seh_context_t* sehp_deregister(int sehId)
 {
 	seh_context_t *pctx = NULL;
 
+	dprint("seh id %lu deregistering..", sehId);
+
 	for (context_listnode_t *node = listx.head, *pnode = NULL; node != NULL; node = node->next)
 	{
 		if (node->context->id == sehId)
@@ -227,7 +281,7 @@ seh_context_t* sehp_deregister(int sehId)
 				pnode->next = node->next;
 			}
 
-#ifdef _USE_GENERIC_SEH || _USE_GCC_LABEL_SUPPORTED_SEH
+#if defined(_USE_GENERIC_SEH) || defined(_USE_GCC_LABEL_SUPPORTED_SEH)
 
 			if (!listx.head)
 				sehp_remove_signal_traps();
@@ -242,6 +296,8 @@ seh_context_t* sehp_deregister(int sehId)
 
 		pnode = node;
 	}
+
+	dprint("deregister %s", pctx != NULL ? "OK" : "NOT FOUND");
 
 	return pctx;
 }
@@ -287,12 +343,55 @@ int seh_getfaultcode(int sehid)
 {
 	seh_context_t *pctx = sehp_get_context(sehid, 1);
 
+	if (!pctx)
+	{
+		pctx = sehp_get_context(sehp_gettid(), 0);
+
+		if (!pctx)
+			return 0;
+
+		if (sehp_has_seh_chain(pctx))
+			pctx = pctx->seh_chain.blink;
+		else
+			return 0;
+	}
+
+	dprint("getfaultcode | pctx = %p, sehid = %lu", pctx, sehid);
+
 	return pctx->faultCode;
 }
 
 void seh_destroy(int sehId)
 {
 	seh_context_t *pctx = sehp_deregister(sehId);
+
+	dprint("destroying seh %lu, %s", sehId, pctx != NULL ? "ok" : "no");
+
+	if (!pctx)
+	{
+		/*
+		hmm looks like its a nested seh.
+		find the root seh by being executed thread's id
+		*/
+		dprint("checking for nested seh");
+		pctx = sehp_get_context(sehp_gettid(), 0);
+
+		if (!pctx)
+		{
+			dprint("illegal call");
+			//probably its an illegal call which is out of the seh mechanism.
+			return;
+		}
+
+		//pop the last seh from the stacked seh chain.
+
+		dprint("%p (%lu) is chained seh", pctx, pctx->id);
+
+		if (sehp_has_seh_chain(pctx))
+			pctx = sehp_pop_seh(pctx);
+		else
+			pctx = NULL;
+	}
 
 	if (pctx)
 		free(pctx);
@@ -301,15 +400,23 @@ void seh_destroy(int sehId)
 int seh_create(jmp_buf *buf, excpinfo_t *exp)
 {
 	seh_context_t *cbuf = getmem(seh_context_t);
+	seh_context_t *early;
 
 	if (exp)
 		memset(exp, 0, sizeof(excpinfo_t));
 
 	cbuf->id = sehp_atomic_add(&globalId, 1);
 	cbuf->threadId = sehp_gettid();
-
 	memcpy(cbuf->buf, buf, sizeof(jmp_buf));
-	sehp_register(cbuf);
+
+	early = sehp_get_context(cbuf->threadId, 0);
+
+	dprint("seh_create | early=%p, new_seh_id: %lu", early, cbuf->id);
+
+	if (early != NULL)
+		sehp_link_to_chain(early, cbuf);
+	else
+		sehp_register(cbuf);
 
 	return cbuf->id;
 }
@@ -321,6 +428,3 @@ const char *seh_get_exception_string(excpinfo_t *ex)
 
 	return seh_error_string[ex->faultCode - 1];
 }
-
-#undef malloc
-#undef free

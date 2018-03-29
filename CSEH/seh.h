@@ -4,6 +4,8 @@
 #include <setjmp.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define SEH_ERROR_ACCESS_VIOLATION			1
 #define SEH_ERROR_ARITHMETIC_OPERATION		2
@@ -33,11 +35,11 @@ typedef pthread_t	threadid_t;
 
 #ifdef _SEH_AUTOSELECT
 
-#if _MSC_VER
+#if defined(_MSC_VER)
 
 #define _USE_MSVC_SEH 1
 
-#elif __GNUC__
+#elif defined(__GNUC__) || defined(__clang__)
 
 #if NTOS
 #define _USE_GENERIC_SEH 1
@@ -49,24 +51,28 @@ typedef pthread_t	threadid_t;
 
 #else
 
-#define _USE_GENERIC_SEH
 
 #endif
 
 
 typedef struct _seh_context_t
 {
-	threadid_t		threadId;
-	int				id;
-	int				faultCode;
-	jmp_buf			buf;
-}seh_context_t;
+	threadid_t              threadId;
+	int                     id;
+	int                     faultCode;
+	jmp_buf                 buf;
+	struct
+	{
+		struct _seh_context_t * flink;
+		struct _seh_context_t * blink;
+	} seh_chain;
+} seh_context_t;
 
 typedef struct _excpinfo_t
 {
-	int				sehId;
-	int				faultCode;
-}excpinfo_t;
+	int sehId;
+	int faultCode;
+} excpinfo_t;
 
 #ifdef __cplusplus
 extern "C" {
@@ -105,7 +111,7 @@ extern "C" {
 				} while (__seh0_init); \
 			} \
 			seh_destroy((x)->sehId); \
-			if ((x)->faultCode != 0) 
+			if ((x)->faultCode != 0)
 
 #elif _USE_MSVC_SEH
 
